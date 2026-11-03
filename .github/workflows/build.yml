@@ -1,0 +1,22 @@
+name: Build Java 3D APK
+on: [push]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Setup Java
+      uses: actions/setup-java@v4
+      with: { distribution: 'temurin', java-version: '17' }
+    - name: Install Gradle 8.2
+      run: |
+        wget -q https://services.gradle.org/distributions/gradle-8.2-bin.zip
+        unzip -q gradle-8.2-bin.zip -d /opt/gradle
+        echo "/opt/gradle/gradle-8.2/bin" >> $GITHUB_PATH
+    - name: Build with Gradle
+      run: gradle assembleDebug --no-daemon
+    - name: Upload APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: MC3D-Java-APK
+        path: app/build/outputs/apk/debug/app-debug.apk
