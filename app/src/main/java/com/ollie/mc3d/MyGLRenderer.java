@@ -14,23 +14,25 @@ import javax.microedition.khronos.opengles.GL10;
 public class MyGLRenderer implements GLSurfaceView.Renderer {
     private Context context;
     public World world;
-    private int program;
-    private int aPosition, aNormal, aColor;
-    private int uMVPMatrix, uMVMatrix, uLightPos;
+    private int program, aPosition, aNormal, aColor, uMVPMatrix, uMVMatrix, uLightPos;
 
     private float[] mvpMatrix = new float[16];
     private float[] viewMatrix = new float[16];
     private float[] projectionMatrix = new float[16];
 
-    // Игрок
-    public float camX = 32f, camY = 40f, camZ = 32f;
-    public float yaw = 0f, pitch = -0.5f;
+    // Игрок (Спавним на высоте 50, чтобы не застрять в блоках)
+    public float camX = 32f, camY = 50f, camZ = 32f;
+    public float yaw = 0f, pitch = 0f;
     public float velY = 0f;
     public boolean isGrounded = false;
-    
+
+    // Кнопки
+    public boolean moveForward = false, moveBackward = false, moveLeft = false, moveRight = false;
+
     private FloatBuffer vertexBuffer;
     private int vertexCount = 0;
     private boolean needsRebuild = true;
+    private long lastTime = 0;
 
     public MyGLRenderer(Context context) {
         this.context = context;
@@ -41,7 +43,7 @@ public class MyGLRenderer implements GLSurfaceView.Renderer {
     public void onSurfaceCreated(GL10 unused, EGLConfig config) {
         GLES20.glClearColor(0.5f, 0.7f, 1.0f, 1.0f);
         GLES20.glEnable(GLES20.GL_DEPTH_TEST);
-        GLES20.glEnable(GLES20.GL_CULL_FACE); // Отсекаем невидимые грани
+        GLES20.glEnable(GLES20.GL_CULL_FACE);
 
         int vShader = loadShader(GLES20.GL_VERTEX_SHADER, ShaderUtils.readTextFileFromRawResource(context, R.raw.vertex_shader));
         int fShader = loadShader(GLES20.GL_FRAGMENT_SHADER, ShaderUtils.readTextFileFromRawResource(context, R.raw.fragment_shader));
@@ -65,7 +67,6 @@ public class MyGLRenderer implements GLSurfaceView.Renderer {
                 for (int z = 0; z < World.SIZE; z++) {
                     int block = world.blocks[x][y][z];
                     if (block != 0) {
-                        // Face Culling: рисуем грань только если рядом воздух
                         if (y == World.HEIGHT-1 || world.blocks[x][y+1][z] == 0) addFace(vertices, x, y, z, 0, 1, 0, block);
                         if (y == 0 || world.blocks[x][y-1][z] == 0) addFace(vertices, x, y, z, 0, -1, 0, block);
                         if (x == 0 || world.blocks[x-1][y][z] == 0) addFace(vertices, x, y, z, -1, 0, 0, block);
@@ -87,11 +88,11 @@ public class MyGLRenderer implements GLSurfaceView.Renderer {
 
     private void addFace(ArrayList<Float> v, float x, float y, float z, float nx, float ny, float nz, int type) {
         float r = 0, g = 0, b = 0;
-        if (type == 1) { r = 0.3f; g = 0.8f; b = 0.3f; } // Трава
-        else if (type == 2) { r = 0.5f; g = 0.3f; b = 0.1f; } // Земля
-        else if (type == 3) { r = 0.5f; g = 0.5f; b = 0.5f; } // Камень
-        else if (type == 4) { r = 0.4f; g = 0.2f; b = 0.1f; } // Дерево
-        else if (type == 5) { r = 0.1f; g = 0.6f; b = 0.1f; } // Листва
+        if (type == 1) { r = 0.3f; g = 0.8f; b = 0.3f; } 
+        else if (type == 2) { r = 0.5f; g = 0.3f; b = 0.1f; } 
+        else if (type == 3) { r = 0.5f; g = 0.5f; b = 0.5f; } 
+        else if (type == 4) { r = 0.4f; g = 0.2f; b = 0.1f; } 
+        else if (type == 5) { r = 0.1f; g = 0.6f; b = 0.1f; } 
 
         float size = 0.5f;
         float[] verts;
@@ -116,19 +117,42 @@ public class MyGLRenderer implements GLSurfaceView.Renderer {
     public void onSurfaceChanged(GL10 unused, int width, int height) {
         GLES20.glViewport(0, 0, width, height);
         float ratio = (float) width / height;
-        Matrix.frustumM(projectionMatrix, 0, -ratio, ratio, -1, 1, 0.1f, 100f);
+        Matrix.perspectiveM(projectionMatrix, 0, 75f, ratio, 0.1f, 100f);
     }
 
     @Override
     public void onDrawFrame(GL10 unused) {
         if (needsRebuild) rebuildMesh();
+        
+        long now = System.currentTimeMillis();
+        float dt = (now - lastTime) / 1000f;
+        if (dt > 0.1f) dt = 0.1f; 
+        lastTime = now;
+
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT | GLES20.GL_DEPTH_BUFFER_BIT);
 
-        // Физика (Гравитация)
-        velY -= 0.01f;
-        camY += velY;
+        // Физика и Движение
+        float moveSpeed = 6.0f * dt;
+        float dx = 0, dz = 0;
         
-        // Коллизия с землей
+        if (moveForward) { dx += Math.sin(yaw) * moveSpeed; dz -= Math.cos(yaw) * moveSpeed; }
+        if (moveBackward) { dx -= Math.sin(yaw) * moveSpeed; dz += Math.cos(yaw) * moveSpeed; }
+        if (moveLeft) { dx -= Math.cos(yaw) * moveSpeed; dz -= Math.sin(yaw) * moveSpeed; }
+        if (moveRight) { dx += Math.cos(yaw) * moveSpeed; dz += Math.sin(yaw) * moveSpeed; }
+
+        // Проверка коллизий по X и Z
+        int nx = (int)(camX + dx);
+        int nz = (int)(camZ + dz);
+        int ny = (int)(camY - 1.5f); // Проверяем на уровне ног
+
+        if (nx >= 0 && nx < World.SIZE && ny >= 0 && ny < World.HEIGHT && world.blocks[nx][ny][(int)camZ] == 0) camX += dx;
+        if (nz >= 0 && nz < World.SIZE && ny >= 0 && ny < World.HEIGHT && world.blocks[(int)camX][ny][nz] == 0) camZ += dz;
+
+        // Гравитация
+        velY -= 25.0f * dt;
+        camY += velY * dt;
+
+        // Проверка приземления
         int px = (int)camX; int py = (int)camY; int pz = (int)camZ;
         if (py >= 0 && py < World.HEIGHT && px >= 0 && px < World.SIZE && pz >= 0 && pz < World.SIZE) {
             if (world.blocks[px][py][pz] != 0) {
@@ -166,13 +190,19 @@ public class MyGLRenderer implements GLSurfaceView.Renderer {
         }
     }
 
-    // Логика копания (Рейкаст)
+    public void jump() {
+        if (isGrounded) {
+            velY = 8.0f;
+            isGrounded = false;
+        }
+    }
+
     public void breakBlock() {
         float lookX = (float) (Math.sin(yaw) * Math.cos(pitch));
         float lookY = (float) Math.sin(pitch);
         float lookZ = (float) (-Math.cos(yaw) * Math.cos(pitch));
         
-        for (float i = 0.5f; i < 5f; i += 0.2f) {
+        for (float i = 0.5f; i < 6f; i += 0.2f) {
             int tx = (int)(camX + lookX * i);
             int ty = (int)(camY + lookY * i);
             int tz = (int)(camZ + lookZ * i);
